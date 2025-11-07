@@ -43,11 +43,11 @@ def run_stress_test():
                 sg.popup_error("Liczba obserwujących musi być liczbą!", location=(1920, None))
                 continue
     
-    # CZYSZCZENIE PRZED TESTEM
+    # CZYSZCZENIE PRZED TESTEM - polskie nazwy
     sess = db.get_session()
-    sess.execute("TRUNCATE followers_by_user")
-    sess.execute("TRUNCATE timeline_by_user")
-    sess.execute("TRUNCATE following_by_user") # Dodano czyszczenie nowej tabeli
+    sess.execute("TRUNCATE kto_mnie_obserwuje")
+    sess.execute("TRUNCATE moja_os_czasu")
+    sess.execute("TRUNCATE kogo_obserwuje")
     
     # Wykonanie stress testu z podanymi parametrami
     result = f"Uruchamiam Stress Test z {followers_count} obserwującymi...\n"
@@ -82,8 +82,6 @@ def run_stress_test():
 
     result += f"\n--- WYNIK STRESS TESTU ---\n"
     result += f"Treść posta: '{post_content}'\n"
-    # Poprawka: post() celebryty nic nie robi (to dobrze!), więc mierzymy co innego
-    # Mierzymy czas odczytu osi czasu przez jednego z followerów
     
     result += f"Publikacja posta przez celebrytę (bez fan-out) zajęła: {duration_ms:.2f} ms\n"
 
