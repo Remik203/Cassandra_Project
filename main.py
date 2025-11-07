@@ -9,7 +9,6 @@ def print_rows(rows):
     result = ""
     for row in rows:
         count += 1
-        # Zakładamy, że 'row' jest teraz obiektem typu PostRow
         result += f"  -> @{row.author_username}: {row.content} ({row.post_id})\n"
     if count == 0:
         result = "  --- (Brak wyników) ---\n"
@@ -20,7 +19,7 @@ def run_stress_test():
     stress_layout = [
         [sg.Text("Konfiguracja Stress Test")],
         [sg.Text("Liczba obserwujących:"), sg.InputText(default_text="1000", key='followers_count')],
-        [sg.Text("Treść posta:"), sg.InputText(default_text="My stress test post!", key='post_content')],
+        [sg.Text("Tresc posta:"), sg.InputText(default_text="My stress test post!", key='post_content')],
         [sg.Button('Uruchom Test'), sg.Button('Anuluj')]
     ]
     
