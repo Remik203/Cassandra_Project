@@ -1,0 +1,79 @@
+version: "3.8"
+
+services:
+  cassandra-1:
+    image: cassandra:latest
+    container_name: cassandra-1
+    hostname: cassandra-1
+    ports:
+      - "9042:9042"
+    mem_limit: 5G
+    environment:
+      - CASSANDRA_CLUSTER_NAME=MyCluster
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_SEEDS=cassandra-1
+      - MAX_HEAP_SIZE=3G
+      - HEAP_NEWSIZE=800M
+    networks:
+      - cassandra-net
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status || exit 1"]
+      interval: 40s
+      timeout: 20s
+      retries: 6
+
+  cassandra-2:
+    image: cassandra:latest
+    container_name: cassandra-2
+    hostname: cassandra-2
+    mem_limit: 4G
+    environment:
+      - CASSANDRA_CLUSTER_NAME=MyCluster
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_SEEDS=cassandra-1
+      - MAX_HEAP_SIZE=2G
+      - HEAP_NEWSIZE=512M
+    depends_on:
+      cassandra-1:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - cassandra-net
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status || exit 1"]
+      interval: 40s
+      timeout: 20s
+      retries: 6
+
+  cassandra-3:
+    image: cassandra:latest
+    container_name: cassandra-3
+    hostname: cassandra-3
+    mem_limit: 4.5G
+    environment:
+      - CASSANDRA_CLUSTER_NAME=MyCluster
+      - CASSANDRA_DC=dc1
+      - CASSANDRA_RACK=rack1
+      - CASSANDRA_ENDPOINT_SNITCH=GossipingPropertyFileSnitch
+      - CASSANDRA_SEEDS=cassandra-1
+      - MAX_HEAP_SIZE=2G
+      - HEAP_NEWSIZE=512M
+    depends_on:
+      cassandra-2:
+        condition: service_healthy
+    restart: on-failure
+    networks:
+      - cassandra-net
+    healthcheck:
+      test: ["CMD-SHELL", "nodetool status || exit 1"]
+      interval: 40s
+      timeout: 20s
+      retries: 6
+
+networks:
+  cassandra-net:
+    driver: bridge
