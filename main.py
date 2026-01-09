@@ -1,224 +1,236 @@
 import backend as db
 import services as timeline_service
 import time
-import PySimpleGUI as sg
 import os
 
-def print_rows(rows):
-    count = 0
-    result = ""
-    for row in rows:
-        count += 1
-        result += f"  -> @{row.author_username}: {row.content} ({row.post_id})\n"
-    if count == 0:
-        result = "  --- (Brak wyników) ---\n"
-    return result
+# --- NARZĘDZIA POMOCNICZE ---
 
-def run_stress_test():
-    # Okno konfiguracji stress testu
-    stress_layout = [
-        [sg.Text("Konfiguracja Stress Test")],
-        [sg.Text("Liczba obserwujących:"), sg.InputText(default_text="1000", key='followers_count')],
-        [sg.Text("Tresc posta:"), sg.InputText(default_text="My stress test post!", key='post_content')],
-        [sg.Button('Uruchom Test'), sg.Button('Anuluj')]
-    ]
-    
-    stress_window = sg.Window('Stress Test Config', stress_layout, location=(1920, None))
-    
-    while True:
-        event, values = stress_window.read()
-        
-        if event in (sg.WIN_CLOSED, 'Anuluj'):
-            stress_window.close()
-            return "Stress test anulowany.\n"
-        
-        if event == 'Uruchom Test':
-            try:
-                followers_count = int(values['followers_count'])
-                post_content = values['post_content']
-                stress_window.close()
-                break
-            except ValueError:
-                sg.popup_error("Liczba obserwujących musi być liczbą!", location=(1920, None))
-                continue
-    
-    # CZYSZCZENIE PRZED TESTEM - polskie nazwy
-    sess = db.get_session()
-    sess.execute("TRUNCATE kto_mnie_obserwuje")
-    sess.execute("TRUNCATE moja_os_czasu")
-    sess.execute("TRUNCATE kogo_obserwuje")
-    
-    # Wykonanie stress testu z podanymi parametrami
-    result = f"Uruchamiam Stress Test z {followers_count} obserwującymi...\n"
-    start_time = time.perf_counter()
+def clear_screen():
+    os.system('cls' if os.name == 'nt' else 'clear')
 
-    celebrity = "CelebrityUser"
+def print_separator():
+    print("-" * 50)
+
+def print_header(title):
+    print("\n" + "=" * 50)
+    print(f" {title.upper()}")
+    print("=" * 50)
+
+def format_rows(rows):
+    """Wyświetla wyniki z bazy w ładnej formie."""
+    if not rows:
+        print("  [BRAK WYNIKÓW]")
+        return
+
+    for i, row in enumerate(rows, 1):
+        print(f"  {i}. {row}")
+
+# --- STRESS TESTY ---
+
+def run_stress_test_push():
+    print_header("Stress Test: PUSH")
+    print("CELEBRYTA pisze do wielu fanów.")
     
-    # --- NOWY, SZYBKI SETUP ---
-    result += f"Setup: Generowanie {followers_count} obserwujących w pamięci...\n"
-    followers_list = [f"Follower_{i}" for i in range(followers_count)]
-    
-    result += f"Setup: Wstawianie {followers_count} obserwujących do bazy (BATCH)...\n"
-    
-    # Wywołujemy nową funkcję wsadową zamiast wolnej pętli
     try:
-        timeline_service.stress_add_followers_batch(celebrity, followers_list)
-        result += "Setup: Wstawianie wsadowe zakończone.\n"
+        followers_count = int(input("Podaj liczbę obserwujących: "))
+        posts_count = int(input("Podaj liczbę postów do napisania: "))
+        post_content = input("Treść posta testowego: ")
+    except ValueError:
+        print("Błąd: Wprowadzono niepoprawne liczby.")
+        return
+
+    print_separator()
+    print("PRZYGOTOWANIE ŚRODOWISKA...")
+    
+    try:
+        sess = db.get_session()
+        # Czyszczenie tabel
+        tables = ["kto_mnie_obserwuje", "moja_os_czasu", "kogo_obserwuje", "moje_posty", "user_stats"]
+        for table in tables:
+            sess.execute(f"TRUNCATE {table}")
+
+        start_time = time.perf_counter()
+        celebrity = "CelebrityUser"
+
+        print(f"-> Generowanie {followers_count} obserwujących dla {celebrity}...")
+        for i in range(followers_count):
+            follower = f"Follower_{i}"
+            timeline_service.follow_user(follower, celebrity)
+            if i % 100 == 0:
+                print(f"   ...dodano {i} fanów", end='\r')
+        
+        print(f"\n-> Gotowe. {celebrity} ma {followers_count} fanów.")
+        
+        print("\nStart testu...")
+        post_start_time = time.perf_counter()
+
+        for i in range(posts_count):
+            timeline_service.post(celebrity, f"{post_content} #{i+1}")
+            print(f"-> Opublikowano post #{i+1}")
+
+        post_end_time = time.perf_counter()
+        
+        # Obliczenia
+        duration_ms = (post_end_time - post_start_time) * 1000
+        avg_per_post = duration_ms / posts_count
+        total_duration = time.perf_counter() - start_time
+
+        print_header("Wyniki testu")
+        print(f"Czas publikacji {posts_count} postów: {duration_ms:.2f} ms")
+        print(f"Średnio na post: {avg_per_post:.2f} ms")
+        print(f"Całkowity czas testu: {total_duration:.2f} s")
+        
     except Exception as e:
-        result += f"BŁĄD W TRAKCIE BATCHA: {e}\n"
-        return result
-    # --- KONIEC NOWEGO SETUPU ---
-
-    result += f"Setup complete. {followers_count} followers now observe {celebrity}.\n"
-    result += f"TEST: Mierzenie czasu publikacji posta: '{post_content}'...\n"
-
-    post_start_time = time.perf_counter()
-    timeline_service.post(celebrity, post_content)
-    post_end_time = time.perf_counter()
-
-    duration_ms = (post_end_time - post_start_time) * 1000
-    total_duration = (time.perf_counter() - start_time)
-
-    result += f"\n--- WYNIK STRESS TESTU ---\n"
-    result += f"Treść posta: '{post_content}'\n"
+        print(f"BŁĄD PODCZAS TESTU: {e}")
     
-    result += f"Publikacja posta przez celebrytę (bez fan-out) zajęła: {duration_ms:.2f} ms\n"
+    input("\nNaciśnij ENTER, aby wrócić do menu...")
 
-    # Zmierzmy czas odczytu (PULL) przez jednego z followerów
-    test_follower = "Follower_1"
-    pull_start_time = time.perf_counter()
+def run_stress_test_pull():
+    print_header("Stress Test: PULL")
+    print("UŻYTKOWNIK pobiera timeline od wielu celebrytów.")
+
     try:
-        timeline_service.get_timeline(test_follower)
+        celebrity_count = int(input("Podaj liczbę celebrytów: "))
+        pull_count = int(input("Ile razy pobrać timeline: "))
+    except ValueError:
+        print("Błąd: Wprowadzono niepoprawne liczby.")
+        return
+
+    print_separator()
+    print("PRZYGOTOWANIE ŚRODOWISKA...")
+
+    try:
+        sess = db.get_session()
+        tables = ["kto_mnie_obserwuje", "moja_os_czasu", "kogo_obserwuje", "moje_posty", "user_stats"]
+        for table in tables:
+            sess.execute(f"TRUNCATE {table}")
+
+        start_time = time.perf_counter()
+        follower = "User"
+
+        print(f"-> Tworzenie {celebrity_count} celebrytów i obserwacji...")
+        for i in range(celebrity_count):
+            celebrity = f"Celebrity_{i}"
+            timeline_service.follow_user(follower, celebrity)
+            timeline_service.post(celebrity, "Example post for pull test.")
+           
+            sess.execute(timeline_service.PREPARED_INC_FOLLOWERS_pull_test, 
+                         [timeline_service.CELEBRITY_TRESHOLD, celebrity])
+            if i % 50 == 0:
+                print(f"Utworzono {i} celebrytów", end='\r')
+
+        print(f"\n-> Gotowe. {follower} obserwuje {celebrity_count} osób.")
+        
+        print("\nROZPOCZYNAM POMIAR POBIERANIA TIMELINE...")
+        pull_start_time = time.perf_counter()
+
+        for i in range(pull_count):
+            timeline_service.get_timeline(follower)
+            print(f"-> Pobranie #{i+1} zakończone")
+
         pull_end_time = time.perf_counter()
-        pull_duration_ms = (pull_end_time - pull_start_time) * 1000
-        result += f"Odczyt osi czasu (PULL) przez '{test_follower}' zajął: {pull_duration_ms:.2f} ms\n"
+
+        # Obliczenia
+        duration_ms = (pull_end_time - pull_start_time) * 1000
+        avg_per_pull = duration_ms / pull_count
+        total_duration = time.perf_counter() - start_time
+
+        print_header("WYNIKI TESTU PULL")
+        print(f"Czas {pull_count} pobrań: {duration_ms:.2f} ms")
+        print(f"Średnio na pobranie: {avg_per_pull:.2f} ms")
+        print(f"Całkowity czas testu: {total_duration:.2f} s")
+
     except Exception as e:
-        result += f"Błąd przy pomiarze PULL: {e}\n"
+        print(f"BŁĄD PODCZAS TESTU: {e}")
 
-    result += f"Cały test (z setupem) zajął: {total_duration:.2f} s\n"
-    result += "----------------------------\n"
-    return result
+    input("\nNaciśnij ENTER, aby wrócić do menu...")
 
-def main_loop():
-    # Okno logowania
-    login_layout = [
-        [sg.Text("Podaj swoją nazwę użytkownika:")],
-        [sg.InputText(key='username')],
-        [sg.Button('Zaloguj'), sg.Button('Anuluj')]
-    ]
+# --- GŁÓWNA PĘTLA APLIKACJI ---
+
+def main_menu():
+    db.connect()
+    print("Połączono z bazą danych Cassandra.")
     
-    login_window = sg.Window('Login', login_layout, location=(1920,None))
-    
+    current_user = input("\nPodaj nazwę użytkownika, aby się zalogować: ").strip()
+    if not current_user:
+        print("Nie podano użytkownika. Zamykanie.")
+        return
+
     while True:
-        event, values = login_window.read()
+        clear_screen()
+        print_header(f"Cassandra Timeline CLI | Zalogowany: {current_user}")
+        print("1. Moja Oś Czasu (Timeline)")
+        print("2. Mój Profil (Moje posty)")
+        print("3. Napisz Post")
+        print("4. Zaobserwuj Użytkownika")
+        print("-" * 30)
+        print("5. Stress Test: PUSH (Celebrity post -> Fans)")
+        print("6. Stress Test: PULL (User <- Celebrities)")
+        print("-" * 30)
+        print("7. Zmień użytkownika")
+        print("0. Wyjście")
+        print_separator()
         
-        if event in (sg.WIN_CLOSED, 'Anuluj'):
-            login_window.close()
-            return
-            
-        if event == 'Zaloguj' and values['username']:
-            current_user = values['username']
-            login_window.close()
-            break
-    
-    # Główne menu
-    main_layout = [
-        [sg.Text(f"Aktywny użytkownik: {current_user}", key='current_user_display')], 
-        [sg.Text(f"Liczba obserwujących: 0", key='followers_counter')],
-        [sg.Button('Zmień użytkownika')],
-        [sg.Button('Pokaż moją oś czasu')],
-        [sg.Button('Pokaż mój profil')],
-        [sg.Button('Publikuj post')],
-        [sg.Button('Obserwuj kogoś')],
-        [sg.Button('Uruchom Stress Test')],
-        [sg.Button('Zakończ')],
-        [sg.Multiline(size=(80, 20), key='output', disabled=True)]
-    ]
-    
-    main_window = sg.Window('Libertyn App', main_layout, location=(1920,None), finalize=True)
-    
-    # Funkcja do odświeżania liczby obserwujących
-    def refresh_followers_count():
+        choice = input("Wybierz opcję: ")
+
         try:
-            followers_count = timeline_service.get_followers_count(current_user)
-            main_window['followers_counter'].update(f"Liczba obserwujących: {followers_count}")
-        except Exception as e:
-            print(f"DEBUG: Błąd przy refresh: {e}")
-            main_window['followers_counter'].update("Liczba obserwujących: 0")
-    
-    # Początkowe odświeżenie - DOPIERO PO finalize=True
-    refresh_followers_count()
-    
-    while True:
-        event, values = main_window.read()
-        
-        if event in (sg.WIN_CLOSED, 'Zakończ'):
-            break
-            
-        try:
-            if event == 'Zmień użytkownika':
-                new_user = sg.popup_get_text('Podaj nową nazwę użytkownika:', location=(1920,None))
+            if choice == '1':
+                print_header(f"Oś czasu: {current_user}")
+                rows = timeline_service.get_timeline(current_user)
+                format_rows(rows)
+                input("\n[Enter] aby wrócić...")
+
+            elif choice == '2':
+                print_header(f"Profil: {current_user}")
+                rows = timeline_service.get_profile(current_user)
+                format_rows(rows)
+                input("\n[Enter] aby wrócić...")
+
+            elif choice == '3':
+                print_header("Nowy Post")
+                content = input("Treść: ")
+                if content:
+                    timeline_service.post(current_user, content)
+                    print("\n>> Post opublikowany pomyślnie!")
+                else:
+                    print(">> Anulowano (pusta treść).")
+                time.sleep(1.5)
+
+            elif choice == '4':
+                print_header("Obserwuj")
+                target = input("Kogo chcesz obserwować?: ")
+                if target:
+                    timeline_service.follow_user(current_user, target)
+                    print(f"\n>> Zaobserwowano użytkownika {target}!")
+                else:
+                    print(">> Anulowano.")
+                time.sleep(1.5)
+
+            elif choice == '5':
+                run_stress_test_push()
+
+            elif choice == '6':
+                run_stress_test_pull()
+
+            elif choice == '7':
+                new_user = input("Podaj nową nazwę użytkownika: ").strip()
                 if new_user:
                     current_user = new_user
-                    main_window['current_user_display'].update(f"Aktywny użytkownik: {current_user}")
-                    refresh_followers_count()
+            
+            elif choice == '0':
+                print("Zamykanie...")
+                break
+            
+            else:
+                print("Niepoprawna opcja.")
+                time.sleep(1)
 
-            elif event == 'Pokaż moją oś czasu':
-                try:
-                    rows = timeline_service.get_timeline(current_user)
-                    output = f"--- Oś czasu dla {current_user} ---\n"
-                    output += print_rows(rows)
-                    main_window['output'].update(output)
-                except Exception as e:
-                    main_window['output'].update(f"Błąd przy pobieraniu osi czasu: {e}\n")
-                
-            elif event == 'Pokaż mój profil':
-                try:
-                    rows = timeline_service.get_profile(current_user)
-                    output = f"--- Profil {current_user} ---\n"
-                    output += print_rows(rows)
-                    main_window['output'].update(output)
-                except Exception as e:
-                    main_window['output'].update(f"Błąd przy pobieraniu profilu: {e}\n")
-                
-            elif event == 'Publikuj post':
-                content = sg.popup_get_text('Treść posta:', location=(1920,None))
-                if content:
-                    try:
-                        timeline_service.post(current_user, content)
-                        main_window['output'].update(f"Post opublikowany: '{content}'\n")
-                        refresh_followers_count()
-                    except Exception as e:
-                        main_window['output'].update(f"Błąd przy publikowaniu: {e}\n")
-                    
-            elif event == 'Obserwuj kogoś':
-                user_to_follow = sg.popup_get_text('Kogo chcesz obserwować:', location=(1920,None))
-                if user_to_follow:
-                    try:
-                        # Nie musimy już sprawdzać count, funkcja follow_user robi to sama
-                        timeline_service.follow_user(current_user, user_to_follow)
-                        main_window['output'].update(f"Obserwujesz teraz {user_to_follow}!\n")
-                    except Exception as e:
-                        main_window['output'].update(f"Błąd przy obserwowaniu: {e}\n")
-                    
-            elif event == 'Uruchom Stress Test':
-                try:
-                    result = run_stress_test()
-                    main_window['output'].update(result)
-                    refresh_followers_count() # Odśwież dla "CelebrityUser" jeśli jest aktywny
-                except Exception as e:
-                    main_window['output'].update(f"Błąd w stress test: {e}\n")
-                
         except Exception as e:
-            main_window['output'].update(f"NIEOCZEKIWANY BŁĄD: {e}\n")
-    
-    main_window.close()
+            print(f"Błąd: {e}")
+            input("\nNaciśnij ENTER, aby kontynuować...")
+
+    db.close()
+    print("Rozłączono.")
 
 if __name__ == "__main__":
-    try:
-        db.connect()
-        main_loop()
-    except Exception as e:
-        sg.popup_error(f"KRYTYCZNY BŁĄD POŁĄCZENIA: {e}", location=(1920,None))
-    finally:
-        db.close()
+    main_menu()
