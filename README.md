@@ -124,7 +124,12 @@ CREATE INDEX ON kogo_obserwuje (following_username);
    cassandra -f
    ```
 
-2. **Uruchomienie aplikacji głównej**
+2. **Uruchomienie środowiska python**
+   ```bash
+   python3 -m venv .
+   ```
+
+3. **Uruchomienie aplikacji głównej**
    ```bash
    python3 main.py
    ```

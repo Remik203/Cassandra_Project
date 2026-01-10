@@ -2,8 +2,14 @@ import backend as db
 import services as timeline_service
 import time
 import os
+import uuid
+from cassandra.concurrent import execute_concurrent_with_args
 
-# --- NARZĘDZIA POMOCNICZE ---
+# Połącz z bazą danych
+db.connect()
+timeline_service.initialize_prepared_statements()
+
+# --- FUNKCJE POMOCNICZE ---
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -29,7 +35,6 @@ def format_rows(rows):
 
 def run_stress_test_push():
     print_header("Stress Test: PUSH")
-    print("CELEBRYTA pisze do wielu fanów.")
     
     try:
         followers_count = int(input("Podaj liczbę obserwujących: "))
@@ -40,11 +45,11 @@ def run_stress_test_push():
         return
 
     print_separator()
-    print("PRZYGOTOWANIE ŚRODOWISKA...")
+    print("PRZYGOTOWANIE ŚRODOWISKA (Wyczyszczenie i generowanie obserwatorów)...")
     
     try:
         sess = db.get_session()
-        # Czyszczenie tabel
+        # 1. Czyszczenie
         tables = ["kto_mnie_obserwuje", "moja_os_czasu", "kogo_obserwuje", "moje_posty", "user_stats"]
         for table in tables:
             sess.execute(f"TRUNCATE {table}")
@@ -52,33 +57,46 @@ def run_stress_test_push():
         start_time = time.perf_counter()
         celebrity = "CelebrityUser"
 
-        print(f"-> Generowanie {followers_count} obserwujących dla {celebrity}...")
+        # 2. Generowanie danych w pamięci        
+        insert_kto_mnie = timeline_service.get_prepared('INSERT_KTO_MNIE_OBSERWUJE')
+        insert_kogo = timeline_service.get_prepared('INSERT_KOGO_OBSERWUJE')
+        
+        data_kto_mnie = [] # Celebryta <- Fan
+        data_kogo = []     # Fan -> Celebryta
+        
         for i in range(followers_count):
             follower = f"Follower_{i}"
-            timeline_service.follow_user(follower, celebrity)
-            if i % 100 == 0:
-                print(f"   ...dodano {i} fanów", end='\r')
+            data_kto_mnie.append((celebrity, follower))
+            data_kogo.append((follower, celebrity))
+
+        # 3. Równoległy zapis do bazy
+        execute_concurrent_with_args(sess, insert_kto_mnie, data_kto_mnie, concurrency=100)
+        execute_concurrent_with_args(sess, insert_kogo, data_kogo, concurrency=100)
         
-        print(f"\n-> Gotowe. {celebrity} ma {followers_count} fanów.")
+        # 4. Aktualizacja licznika
+        update_stats = timeline_service.get_prepared('INC_FOLLOWERS_PULL_TEST')
+        sess.execute(update_stats, [followers_count, celebrity])
         
-        print("\nStart testu...")
+        setup_time = time.perf_counter() - start_time
+        print(f"-> Setup zajął {setup_time:.2f}s. {celebrity} ma {followers_count} fanów.")
+        
+        print("\nSTART TESTU PUSH...")
         post_start_time = time.perf_counter()
 
+        # Właściwy test - Celebryta pisze posty
         for i in range(posts_count):
             timeline_service.post(celebrity, f"{post_content} #{i+1}")
-            print(f"-> Opublikowano post #{i+1}")
 
         post_end_time = time.perf_counter()
         
         # Obliczenia
         duration_ms = (post_end_time - post_start_time) * 1000
         avg_per_post = duration_ms / posts_count
-        total_duration = time.perf_counter() - start_time
 
-        print_header("Wyniki testu")
+        print_header("Wyniki testu PUSH")
+        print(f"Liczba fanów: {followers_count}")
         print(f"Czas publikacji {posts_count} postów: {duration_ms:.2f} ms")
         print(f"Średnio na post: {avg_per_post:.2f} ms")
-        print(f"Całkowity czas testu: {total_duration:.2f} s")
         
     except Exception as e:
         print(f"BŁĄD PODCZAS TESTU: {e}")
@@ -87,10 +105,9 @@ def run_stress_test_push():
 
 def run_stress_test_pull():
     print_header("Stress Test: PULL")
-    print("UŻYTKOWNIK pobiera timeline od wielu celebrytów.")
 
     try:
-        celebrity_count = int(input("Podaj liczbę celebrytów: "))
+        celebrity_count = int(input("Podaj liczbę celebrytów do obserwowania: "))
         pull_count = int(input("Ile razy pobrać timeline: "))
     except ValueError:
         print("Błąd: Wprowadzono niepoprawne liczby.")
@@ -108,40 +125,56 @@ def run_stress_test_pull():
         start_time = time.perf_counter()
         follower = "User"
 
-        print(f"-> Tworzenie {celebrity_count} celebrytów i obserwacji...")
-        for i in range(celebrity_count):
-            celebrity = f"Celebrity_{i}"
-            timeline_service.follow_user(follower, celebrity)
-            timeline_service.post(celebrity, "Example post for pull test.")
-           
-            sess.execute(timeline_service.PREPARED_INC_FOLLOWERS_pull_test, 
-                         [timeline_service.CELEBRITY_TRESHOLD, celebrity])
-            if i % 50 == 0:
-                print(f"Utworzono {i} celebrytów", end='\r')
+        # 1. Generowanie danych        
+        insert_kogo = timeline_service.get_prepared('INSERT_KOGO_OBSERWUJE')
+        insert_moje_posty = timeline_service.get_prepared('INSERT_MOJE_POSTY')
+        update_stats = timeline_service.get_prepared('INC_FOLLOWERS_PULL_TEST')
 
-        print(f"\n-> Gotowe. {follower} obserwuje {celebrity_count} osób.")
+        data_obs = []       # User -> Celebryta
+        data_posts = []     # Posty celebrytów
+        data_stats = []     # Liczniki celebrytów
         
-        print("\nROZPOCZYNAM POMIAR POBIERANIA TIMELINE...")
+        limit = timeline_service.CELEBRITY_TRESHOLD + 100 # Wartość powyżej progu
+
+        for i in range(celebrity_count):
+            cel = f"Celeb_{i}"
+            # User obserwuje celebrytę
+            data_obs.append((follower, cel))
+            # Celebryta ma post (żeby było co pobierać)
+            data_posts.append((cel, uuid.uuid1(), "Test post for pull."))
+            # Celebryta staje się "celebrytą" (licznik)
+            data_stats.append((limit, cel))
+
+        # 2. Równoległy zapis
+        execute_concurrent_with_args(sess, insert_kogo, data_obs, concurrency=100)
+        execute_concurrent_with_args(sess, insert_moje_posty, data_posts, concurrency=100)
+        execute_concurrent_with_args(sess, update_stats, data_stats, concurrency=100)
+
+        setup_time = time.perf_counter() - start_time
+        print(f"\n-> Gotowe. Setup zajął {setup_time:.2f}s.")
+        print(f"-> {follower} obserwuje {celebrity_count} celebrytów.")
+        
+        print("\nSTART TESTU PULL (Get Timeline)...")
         pull_start_time = time.perf_counter()
 
         for i in range(pull_count):
             timeline_service.get_timeline(follower)
-            print(f"-> Pobranie #{i+1} zakończone")
 
         pull_end_time = time.perf_counter()
 
         # Obliczenia
         duration_ms = (pull_end_time - pull_start_time) * 1000
         avg_per_pull = duration_ms / pull_count
-        total_duration = time.perf_counter() - start_time
 
         print_header("WYNIKI TESTU PULL")
+        print(f"Liczba obserwowanych celebrytów: {celebrity_count}")
         print(f"Czas {pull_count} pobrań: {duration_ms:.2f} ms")
         print(f"Średnio na pobranie: {avg_per_pull:.2f} ms")
-        print(f"Całkowity czas testu: {total_duration:.2f} s")
 
     except Exception as e:
         print(f"BŁĄD PODCZAS TESTU: {e}")
+        import traceback
+        traceback.print_exc()
 
     input("\nNaciśnij ENTER, aby wrócić do menu...")
 
@@ -163,11 +196,14 @@ def main_menu():
         print("2. Mój Profil (Moje posty)")
         print("3. Napisz Post")
         print("4. Zaobserwuj Użytkownika")
+        print("5. Przestań obserwować")
+        print("6. Kogo obserwuję")
+        print("7. Kto mnie obserwuje")
         print("-" * 30)
-        print("5. Stress Test: PUSH (Celebrity post -> Fans)")
-        print("6. Stress Test: PULL (User <- Celebrities)")
+        print("8. Stress Test: PUSH (Celebrity post -> Fans)")
+        print("9. Stress Test: PULL (User <- Celebrities)")
         print("-" * 30)
-        print("7. Zmień użytkownika")
+        print("10. Zmień użytkownika")
         print("0. Wyjście")
         print_separator()
         
@@ -207,12 +243,42 @@ def main_menu():
                 time.sleep(1.5)
 
             elif choice == '5':
-                run_stress_test_push()
+                print_header("Przestań obserwować")
+                target = input("Kogo chcesz przestać obserwować?: ")
+                if target:
+                    timeline_service.unfollow_user(current_user, target)
+                    print(f"\n>> Przestałeś obserwować użytkownika {target}!")
+                else:
+                    print(">> Anulowano.")
+                time.sleep(1.5)
 
             elif choice == '6':
-                run_stress_test_pull()
+                print_header(f"Kogo obserwujesz: {current_user}")
+                following_list = timeline_service.get_following_list(current_user)
+                if following_list:
+                    for i, username in enumerate(following_list, 1):
+                        print(f"  {i}. {username}")
+                else:
+                    print("  [NIKOGO NIE OBSERWUJESZ]")
+                input("\n[Enter] aby wrócić...")
 
             elif choice == '7':
+                print_header(f"Kto Cię obserwuje: {current_user}")
+                followers_list = timeline_service.get_followers_list(current_user)
+                if followers_list:
+                    for i, username in enumerate(followers_list, 1):
+                        print(f"  {i}. {username}")
+                else:
+                    print("  [NIKT CIĘ NIE OBSERWUJE]")
+                input("\n[Enter] aby wrócić...")
+
+            elif choice == '8':
+                run_stress_test_push()
+
+            elif choice == '9':
+                run_stress_test_pull()
+
+            elif choice == '10':
                 new_user = input("Podaj nową nazwę użytkownika: ").strip()
                 if new_user:
                     current_user = new_user
