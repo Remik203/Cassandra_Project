@@ -299,4 +299,6 @@ def main_menu():
     print("Rozłączono.")
 
 if __name__ == "__main__":
+    from db_init import initialize_database
+    initialize_database()
     main_menu()
